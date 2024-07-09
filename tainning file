@@ -1,0 +1,54 @@
+# Install necessary libraries
+!pip install transformers torch datasets accelerate
+
+# Import libraries
+import torch
+from transformers import BertTokenizer, BertForSequenceClassification, Trainer, TrainingArguments
+from datasets import load_dataset
+
+# Load dataset
+dataset = load_dataset('imdb')
+
+# Tokenization and data preparation
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+def tokenize_function(examples):
+    return tokenizer(examples['text'], padding='max_length', truncation=True)
+
+tokenized_datasets = dataset.map(tokenize_function, batched=True)
+
+# Load pre-trained model
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=2)
+
+# Training configuration
+training_args = TrainingArguments(
+    output_dir='./results',
+    num_train_epochs=3,  # Adjust number of epochs based on your needs
+    per_device_train_batch_size=8,  # You can adjust the batch size
+    per_device_eval_batch_size=8,
+    warmup_steps=500,
+    weight_decay=0.01,
+    logging_dir='./logs',
+    logging_steps=10,
+    evaluation_strategy="epoch",
+    save_strategy="epoch",
+)
+
+# Trainer
+trainer = Trainer(
+    model=model,
+    args=training_args,
+    train_dataset=tokenized_datasets['train'],
+    eval_dataset=tokenized_datasets['test'],
+)
+
+# Train the model
+trainer.train()
+
+# Evaluate the model
+eval_results = trainer.evaluate()
+print(eval_results)
+
+# Save the fine-tuned model
+model.save_pretrained('fine_tuned_model')
+tokenizer.save_pretrained('fine_tuned_model')
