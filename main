@@ -1,0 +1,247 @@
+from flask import Flask, request, jsonify, render_template
+import joblib
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import string
+import numpy as np
+
+nltk.download('punkt')
+nltk.download('stopwords')
+
+app = Flask(__name__)
+
+# Load the trained model and vectorizer
+model = joblib.load('svm_sentiment_model.joblib')
+vectorizer = joblib.load('tfidf_vectorizer.joblib')
+stop_words = set(stopwords.words('english'))
+punctuation = set(string.punctuation)
+
+def preprocess_text(text):
+    tokens = word_tokenize(text.lower())
+    filtered_tokens = [word for word in tokens if word.isalpha() and word not in stop_words and word not in punctuation]
+    return ' '.join(filtered_tokens)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/analyze', methods=['POST'])
+def analyze():
+    text = request.json['text']
+    processed_text = preprocess_text(text)
+    inputs = vectorizer.transform([processed_text])
+    
+    # Use decision function or probabilities for more granular score
+    decision_function = model.decision_function(inputs)
+    polarity_score = decision_function[0]  # Get the score for the first (and only) input
+    
+    sentiment_label = 'positive' if polarity_score > 0 else 'negative'
+    
+    # Normalize polarity score to be between -10 and 10 for simplicity
+    normalized_score = int((polarity_score / np.max(np.abs(decision_function))) * 10)
+    
+    return jsonify({'sentiment': sentiment_label, 'polarity_score': normalized_score})
+
+if __name__ == '__main__':
+    app.run(debug=True)
+---------------------------
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentiment Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- Include Plotly for graph plotting -->
+</head>
+
+<body>
+    <h1 id="senti">Sentiment Analysis</h1>
+    <form id="sentiment-form">
+        <label for="text">Enter Text:</label>
+        <textarea id="text" name="text" rows="4" cols="50"></textarea><br><br>
+        <input type="button" value="Analyze" onclick="analyzeSentiment()">
+    </form>
+    <h2 id="result"></h2>
+    <div id="plot" style="width: 80%; height: 400px;"></div> <!-- Plotly graph container -->
+
+    <script>
+        function analyzeSentiment() {
+            const text = document.getElementById('text').value;
+            fetch('/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const polarityScore = data.polarity_score;
+                const sentiment = data.sentiment;
+                const positiveScore = sentiment === 'positive' ? polarityScore : 0;
+                const negativeScore = sentiment === 'negative' ? -polarityScore : 0; // Use negative polarity score
+
+                document.getElementById('result').innerText = 'Sentiment: ' + sentiment + ', Polarity Score: ' + polarityScore;
+
+                // Plotting the graph
+                const plotDiv = document.getElementById('plot');
+                const dataPoints = [
+                    {
+                        x: ['Negative', 'Positive'],
+                        y: [negativeScore, positiveScore],
+                        type: 'bar'
+                    }
+                ];
+                const layout = {
+                    title: 'Sentiment Analysis Result',
+                    xaxis: { title: 'Sentiment' },
+                    yaxis: { title: 'Polarity Score' }
+                };
+                Plotly.newPlot(plotDiv, dataPoints, layout);
+            });
+        }
+    </script>
+</body>
+</html>
+-------------------
+!pip install torch transformers datasets scikit-learn nltk flask
+import torch
+from torch.utils.data import DataLoader, Dataset
+from transformers import BertTokenizer, BertForSequenceClassification, AdamW
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+import nltk
+from nltk.corpus import stopwords
+from nltk.tokenize import word_tokenize
+import string
+
+# Download NLTK data
+nltk.download('punkt')
+nltk.download('stopwords')
+
+# Load the IMDB dataset
+from datasets import load_dataset
+dataset = load_dataset('imdb')
+
+# Convert to pandas dataframe
+df_train = pd.DataFrame(dataset['train'])
+df_test = pd.DataFrame(dataset['test'])
+
+# Preprocess text: tokenization, stop words removal, and punctuation removal
+stop_words = set(stopwords.words('english'))
+punctuation = set(string.punctuation)
+
+def preprocess_text(text):
+    tokens = word_tokenize(text.lower())
+    filtered_tokens = [word for word in tokens if word.isalpha() and word not in stop_words and word not in punctuation]
+    return ' '.join(filtered_tokens)
+
+df_train['text'] = df_train['text'].apply(preprocess_text)
+df_test['text'] = df_test['text'].apply(preprocess_text)
+
+# Map labels to scores (0 or 1 to a scale of 0-10)
+df_train['label'] = df_train['label'] * 10
+df_test['label'] = df_test['label'] * 10
+
+# Split the data into two parts
+df_train_part1, df_train_part2 = train_test_split(df_train, test_size=0.5, random_state=42)
+class SentimentDataset(Dataset):
+    def _init_(self, texts, scores, tokenizer, max_len):
+        self.texts = texts
+        self.scores = scores
+        self.tokenizer = tokenizer
+        self.max_len = max_len
+
+    def _len_(self):
+        return len(self.texts)
+
+    def _getitem_(self, idx):
+        text = self.texts[idx]
+        score = self.scores[idx]
+        encoding = self.tokenizer.encode_plus(
+            text,
+            add_special_tokens=True,
+            max_length=self.max_len,
+            return_token_type_ids=False,
+            padding='max_length',
+            truncation=True,
+            return_attention_mask=True,
+            return_tensors='pt',
+        )
+        return {
+            'text': text,
+            'input_ids': encoding['input_ids'].flatten(),
+            'attention_mask': encoding['attention_mask'].flatten(),
+            'score': torch.tensor(score, dtype=torch.float)
+        }
+
+tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+
+def get_data_loader(df, tokenizer, batch_size=8, max_len=128):
+    dataset = SentimentDataset(df['text'].to_numpy(), df['label'].to_numpy(), tokenizer, max_len=max_len)
+    return DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+def train_model(model, data_loader, loss_fn, optimizer, device, n_examples):
+    model = model.train()
+    losses = []
+    for data in data_loader:
+        input_ids = data['input_ids'].to(device)
+        attention_mask = data['attention_mask'].to(device)
+        scores = data['score'].to(device)
+        outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+        preds = outputs.logits.squeeze()
+        loss = loss_fn(preds, scores)
+        losses.append(loss.item())
+        loss.backward()
+        optimizer.step()
+        optimizer.zero_grad()
+    return np.mean(losses)
+
+def eval_model(model, data_loader, loss_fn, device, n_examples):
+    model = model.eval()
+    losses = []
+    with torch.no_grad():
+        for data in data_loader:
+            input_ids = data['input_ids'].to(device)
+            attention_mask = data['attention_mask'].to(device)
+            scores = data['score'].to(device)
+            outputs = model(input_ids=input_ids, attention_mask=attention_mask)
+            preds = outputs.logits.squeeze()
+            loss = loss_fn(preds, scores)
+            losses.append(loss.item())
+    return np.mean(losses)
+# Initialize and train the model on part 1
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+model = BertForSequenceClassification.from_pretrained('bert-base-uncased', num_labels=1)  # Regression
+model = model.to(device)
+
+optimizer = AdamW(model.parameters(), lr=2e-5, correct_bias=False)
+loss_fn = torch.nn.MSELoss().to(device)  # Mean Squared Error Loss for regression
+
+train_data_loader_part1 = get_data_loader(df_train_part1, tokenizer)
+
+EPOCHS = 3
+
+for epoch in range(EPOCHS):
+    print(f'Epoch {epoch + 1}/{EPOCHS} (Part 1)')
+    train_loss = train_model(model, train_data_loader_part1, loss_fn, optimizer, device, len(df_train_part1))
+    print(f'Train loss: {train_loss}')
+# Save the model and tokenizer after training on part 1
+model.save_pretrained('sentiment_model_part1')
+tokenizer.save_pretrained('sentiment_tokenizer')
+# Load the model and continue training on part 2
+model = BertForSequenceClassification.from_pretrained('sentiment_model_part1', num_labels=1)
+model = model.to(device)
+
+train_data_loader_part2 = get_data_loader(df_train_part2, tokenizer)
+
+for epoch in range(EPOCHS):
+    print(f'Epoch {epoch + 1}/{EPOCHS} (Part 2)')
+    train_loss = train_model(model, train_data_loader_part2, loss_fn, optimizer, device, len(df_train_part2))
+    print(f'Train loss: {train_loss}')
+# Save the final model after training on part 2
+model.save_pretrained('sentiment_model_final')
+tokenizer.save_pretrained('sentiment_tokenizer_final')
