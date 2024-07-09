@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sentiment Analysis</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script> <!-- Include Plotly for graph plotting -->
+</head>
+
+<body>
+    <h1 id="senti">Sentiment Analysis</h1>
+    <form id="sentiment-form">
+        <label for="text">Enter Text:</label>
+        <textarea id="text" name="text" rows="4" cols="50"></textarea><br><br>
+        <input type="button" value="Analyze" onclick="analyzeSentiment()">
+    </form>
+    <h2 id="result"></h2>
+    <div id="plot" style="width: 80%; height: 400px;"></div> <!-- Plotly graph container -->
+
+    <script>
+        function analyzeSentiment() {
+            const text = document.getElementById('text').value;
+            fetch('/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text })
+            })
+            .then(response => response.json())
+            .then(data => {
+                const polarityScore = data.polarity_score;
+                const sentiment = data.sentiment;
+                const positiveScore = sentiment === 'positive' ? polarityScore : 0;
+                const negativeScore = sentiment === 'negative' ? -polarityScore : 0; // Use negative polarity score
+
+                document.getElementById('result').innerText = 'Sentiment: ' + sentiment + ', Polarity Score: ' + polarityScore;
+
+                // Plotting the graph
+                const plotDiv = document.getElementById('plot');
+                const dataPoints = [
+                    {
+                        x: ['Negative', 'Positive'],
+                        y: [negativeScore, positiveScore],
+                        type: 'bar'
+                    }
+                ];
+                const layout = {
+                    title: 'Sentiment Analysis Result',
+                    xaxis: { title: 'Sentiment' },
+                    yaxis: { title: 'Polarity Score' }
+                };
+                Plotly.newPlot(plotDiv, dataPoints, layout);
+            });
+        }
+    </script>
+</body>
+</html>
